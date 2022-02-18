@@ -6,6 +6,8 @@ const client = new Client({
 });
 const ip = require('ip');
 const {getTime,event,command} = require('./util.js');
+const { EventEmitter } = require('events');
+const server = new EventEmitter();
 
 let connection = null;
 const responses = new Map();
@@ -28,7 +30,7 @@ client.on('ready', () => {
 const wss = new WebSocket.Server({ port: PORT });
 wss.on('connection', (ws) => {
   connection = ws;
-
+  
   // イベントを登録
   ws.send(event('PlayerMessage'));
   ws.send(event('commandResponse'));
@@ -36,6 +38,7 @@ wss.on('connection', (ws) => {
   sendCmd('getlocalplayername').then((data) => {
     console.log(getTime(), `[log] ${data.localplayername} : 接続を開始しました`);
     sendD(`[log] ${data.localplayername} : 接続を開始しました`);
+    server.emit('onOpen', data.localplayername);
   });
   
   // 接続時に現在のプレイヤーを取得しておく
@@ -44,15 +47,18 @@ wss.on('connection', (ws) => {
   // 各種イベント発生時に呼ばれる関数
   ws.on('message', (packet) => {
     const res = JSON.parse(packet);
+    server.emit('onPacket', res);
     
     if (res.header.messagePurpose == 'commandResponse') {
       if (res.body.recipient === undefined) {
         responses.set(res.header.requestId, res.body);
       }
+      server.emit('onResponse', res);
     }
     
     if (res.header.messagePurpose == 'error') {
       console.log(res);
+      server.emit('onError', res);
     }
     
     if (res.body.eventName == 'PlayerMessage') {
@@ -64,6 +70,7 @@ wss.on('connection', (ws) => {
         let rawSender = res.body.properties.Sender;
         let Sender = rawSender.replace(/§./g, '').replace('@', '＠');
         
+        server.emit('onMessage', {Type,rawMessage,Message,rawSender,Sender}); 
         if (Message.search(/(@everyone|@here)/) !== -1) return sendMsg(`§4禁止語句が含まれているため送信をブロックしました。`, rawSender);
         
         // minecraft -> discord
@@ -71,16 +78,19 @@ wss.on('connection', (ws) => {
           let chatMessage = `[Minecraft] <${Sender}> ${Message}`; // 普通のチャットの時
           console.log(getTime(), chatMessage);
           sendD(chatMessage);
+          server.emit('onChat', {rawMessage,Message,rawSender,Sender});
           
         } else if (Type == 'me') {
           let chatMessage = `[Minecraft] * ${Sender} ${Message}`; // meコマンドのメッセージの時
           console.log(getTime(), chatMessage);
           sendD(chatMessage);
+          server.emit('onMe', {rawMessage,Message,rawSender,Sender});
           
         } else if (Type == 'say') {
           let chatMessage = `[Minecraft] ${Message}`; // sayコマンドのメッセージの時
           console.log(getTime(), chatMessage);
           sendD(chatMessage);
+          server.emit('onSay', {rawMessage,Message,rawSender,Sender});
         }
       }
     }
@@ -91,6 +101,7 @@ wss.on('connection', (ws) => {
     console.log(getTime(), `[log] 接続が終了しました`);
     sendD(`[log] 接続が終了しました`);
     connection = null;
+    server.emit('onClose');
   });
   
 });
@@ -272,3 +283,5 @@ function player() {
     client.user.setActivity(`Server: ${max === 0 ? 'OFFLINE' : `${current}/${max}`} | ${PREFIX}help`);
   });
 }
+
+module.exports = {sendMsg, sendD, getPlayers, sendCmd, server, client}
